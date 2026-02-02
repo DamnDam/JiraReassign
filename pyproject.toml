@@ -1,0 +1,36 @@
+[project]
+name = "jtool"
+authors = [
+    { name = "Damien Thirion", email = "damien.thirion@livejourney.com" }
+]
+version = "0.1.0"
+description = "CLI to bulk replace users in Jira Cloud"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.20.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.12.0",
+  "pydantic-settings>=2.12.0",
+]
+
+[project.scripts]
+jtool = "jtool.cli:app"
+
+[build-system]
+requires = ["uv-build>=0.1"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.14.0",
+  "mypy>=1.8.0",
+  "ipykernel>=7.1.0",
+  "pre-commit>=4.5.1",
+]
+
+[tools.ruff]
+line-length = 100
+src = ["src"]
+exclude = ["__pycache__", ".venv"]
+
