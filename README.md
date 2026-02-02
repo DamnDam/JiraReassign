@@ -4,7 +4,6 @@ A UV-managed Python CLI to bulk replace users in Jira Cloud by reassigning issue
 Fast and concurrent, using async HTTP requests to the Jira REST API.
 
 ## Requirements
-- Python 3.11+
 - [uv](https://github.com/astral-sh/uv) installed
 - Jira Cloud site URL and API token
 
@@ -19,29 +18,30 @@ export JIRA_EMAIL="you@example.com"
 export JIRA_API_TOKEN="<your-api-token>"
 ```
 
-## Install as a UV tool
+## Install
+From the project root, run:
 
 ```bash
-uv tool install .
+uv sync
 ```
 
 ## Usage
 Run the CLI and see help:
 
 ```bash
-jtool --help
+uv run jtool --help
 ```
 
 Basic run with a CSV mapping:
 
 ```bash
-jtool remap mapping.csv issues --project PROJ --concurrency 8
+uv run jtool remap mapping.csv issues --project PROJ --concurrency 8
 ```
 
 Dry run to preview counts:
 
 ```bash
-jtool remap mapping.csv issues --dry-run
+uv run jtool remap mapping.csv issues --dry-run
 ```
 
 CSV format (headers required):
@@ -59,6 +59,15 @@ Sync the environment and install deps with uv:
 
 ```bash
 uv sync
+```
+
+### Setup pre-commit hooks
+Pre-commit hooks ensure code quality before each commit. 
+
+Install them with:
+
+```bash
+uv run pre-commit install
 ```
 
 ### Run lint, checks and formatter
