@@ -3,28 +3,32 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration loaded from environment variables."""
+    """Combined runtime configuration for Jira and Confluence."""
 
-    site: str = Field(
+    base_url: str = Field(
         ...,
-        description="Jira Cloud base URL, e.g., https://your-domain.atlassian.net",
+        description="Atlassian Site base URL, e.g., https://your-domain.atlassian.net",
+        alias="JTOOL_BASE_URL",
     )
     email: str = Field(
         ...,
-        description="Jira user email associated with the API token",
+        description="Atlassian user email associated with the API token",
+        alias="JTOOL_EMAIL",
     )
     api_token: SecretStr = Field(
         ...,
-        description="Jira API token for the email user",
+        description="Atlassian API token for the email user",
+        alias="JTOOL_API_TOKEN",
     )
     concurrency: int = Field(
         10,
         description="Number of concurrent API requests",
         ge=1,
         le=20,
+        alias="JTOOL_CONCURRENCY",
     )
 
     model_config = SettingsConfigDict(
-        env_prefix="JIRA_",
+        env_prefix="JTOOL_",
         env_file=".env",
     )

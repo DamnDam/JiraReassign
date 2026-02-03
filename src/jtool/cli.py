@@ -9,9 +9,18 @@ from pydantic import ValidationError
 
 from rich.table import Table
 
+from jtool.client.confluence import Space
+
 from .term import DualConsole, Progress, create_progress
 from .config import Settings
-from .jira_client import JiraClient, JiraApiError, User, Task
+from .client import (
+    JiraClient,
+    ConfluenceClient,
+    AtlassianApiError,
+    User,
+    Task,
+    SpacePermissionV1,
+)
 
 
 @dataclass
@@ -53,9 +62,28 @@ def get_jira_client(conf: CLIContext) -> JiraClient:
     assert isinstance(conf, CLIContext)
     return JiraClient(
         console=conf.console,
-        base_url=conf.settings.site,
+        base_url=conf.settings.base_url,
         concurrency=conf.settings.concurrency,
-        auth=(conf.settings.email, conf.settings.api_token.get_secret_value()),
+        auth=(
+            conf.settings.email,
+            conf.settings.api_token.get_secret_value(),
+        ),
+    )
+
+
+def get_confluence_client(conf: CLIContext):
+    """Helper to create a ConfluenceClient from CLIContext.
+    Should be used in an async with block.
+    """
+    assert isinstance(conf, CLIContext)
+    return ConfluenceClient(
+        console=conf.console,
+        base_url=conf.settings.base_url,
+        concurrency=conf.settings.concurrency,
+        auth=(
+            conf.settings.email,
+            conf.settings.api_token.get_secret_value(),
+        ),
     )
 
 
@@ -76,8 +104,8 @@ def init(
         settings = Settings(_env_file=env_file) if env_file else Settings()  # pyright: ignore[reportCallIssue]
     except ValidationError as e:
         console.log_error(
-            "Environment not set. Please export JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN.\n"
-            + str(e)
+            "Environment not configured correctly. Please export appropriate environment variables:\n"
+            + "\n".join(f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()),
         )
         raise typer.Exit(code=2)
 
@@ -99,9 +127,9 @@ def check_connection(
             try:
                 user = await client.get_self()
                 console.print(
-                    f"Connected to Jira site '{settings.site}' as user '{user.displayName}' ({user.emailAddress})."
+                    f"Connected to Jira site '{settings.base_url}' as user '{user.displayName}' ({user.emailAddress}) - {user.accountId}"
                 )
-            except JiraApiError as e:
+            except AtlassianApiError as e:
                 console.log_error(
                     f"Failed to connect to Jira: {e.status_code} {e.reason}",
                 )
@@ -463,6 +491,160 @@ def remap_issues(
             console.print(f"Total issues matched: {total}")
         else:
             console.print(f"Done. Total issues matched: {total}, reassigned: {changed}")
+
+    asyncio.run(main())
+
+
+@remap.command("spaces")
+def remap_spaces(
+    ctx: typer.Context,
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Only show counts; no changes."
+    ),
+):
+    """Reassign Confluence spaces from old -> new users according to the CSV mapping."""
+    conf: RemapContext = ctx.obj
+    assert isinstance(conf, RemapContext)
+    console = conf.console
+    progress = conf.progress
+
+    async def main():
+        total = 0
+        changed = 0
+        user_maps = conf.user_maps
+        async with get_confluence_client(conf) as client:
+            with console, progress:
+
+                async def retrieve_space_permissions(
+                    space: Space, users: list[User]
+                ) -> None:
+                    permissions = await client.list_space_permissions(space)
+                    space.permissions = [
+                        perm
+                        for perm in permissions
+                        if perm.subject.type == "user"
+                        and any(
+                            perm.subject.identifier == user.accountId for user in users
+                        )
+                    ]
+                    progress.update(progress.tasks[-1].id, advance=1)
+
+                async def reassign_perm(
+                    space: Space, perm: SpacePermissionV1, new: User
+                ) -> None:
+                    new_perm = perm.model_copy()
+                    new_perm.id = None
+                    new_perm.subject.identifier = new.accountId
+                    try:
+                        await client.add_space_permission(space, new_perm)
+                        nonlocal changed
+                        changed += 1
+                        await client.remove_space_permission(space, perm)
+                    except AtlassianApiError as e:
+                        console.log_error(
+                            f"Failed to reassign permission {str(perm.operation)} in space '{space.key}' for {new.displayName}: {e.status_code} {e.reason}\n{e.response_json}",
+                        )
+                    progress.update(progress.tasks[-1].id, advance=1)
+
+                async def reassign_space(space: Space, new: User) -> None:
+                    assert space.permissions is not None
+
+                    await asyncio.gather(
+                        *[
+                            reassign_perm(space, perm, new)
+                            for perm in (space.permissions or [])
+                        ]
+                    )
+
+                    if space.type == "personal":
+                        await client.rename_space(
+                            space, f"{new.displayName}'s Old Personal Space"
+                        )
+
+                old_users = [old for old, _ in user_maps]
+
+                progress.add_task(description="Gathering spaces...", total=None)
+                await client.acquire_admin()
+                all_spaces = await client.list_spaces()
+                progress.update(progress.tasks[-1].id, total=len(all_spaces))
+                await asyncio.gather(
+                    *(
+                        retrieve_space_permissions(space, old_users)
+                        for space in all_spaces
+                    )
+                )
+
+                space_maps = [
+                    (
+                        old,
+                        new,
+                        [
+                            Space(
+                                **{
+                                    **space.model_dump(),
+                                    "permissions": [
+                                        perm
+                                        for perm in (space.permissions or [])
+                                        if perm.subject.identifier == old.accountId
+                                    ],
+                                },
+                            )
+                            for space in all_spaces
+                            if any(
+                                perm.subject.identifier == old.accountId
+                                for perm in (space.permissions or [])
+                            )
+                        ],
+                    )
+                    for old, new in user_maps
+                    if any(
+                        perm.subject.identifier == old.accountId
+                        for space in all_spaces
+                        for perm in (space.permissions or [])
+                    )
+                ]
+
+                progress_user = progress.add_task(
+                    description=f"Remapping users ({len(space_maps)})...",
+                    total=len(space_maps),
+                    visible=not dry_run and len(space_maps) > 0,
+                )
+                for old, new, spaces in space_maps:
+                    user_total = sum(len(space.permissions or []) for space in spaces)
+                    total += user_total
+                    if dry_run or not user_total:
+                        continue
+
+                    progress_spaces = progress.add_task(
+                        description=f"  {old.emailAddress or old.displayName} -> {new.emailAddress or new.displayName} ({user_total})...",
+                        total=user_total,
+                    )
+                    await asyncio.gather(
+                        *(reassign_space(space, new) for space in spaces)
+                    )
+
+                    progress.update(
+                        progress_spaces, total=user_total, completed=user_total
+                    )
+                    progress.update(progress_user, advance=1)
+
+        if dry_run:
+            table = Table()
+            table.add_column("Old User", style="cyan", no_wrap=True)
+            table.add_column("Total Spaces", style="green")
+            table.add_column("Total Permissions", style="green")
+            for old, new, spaces in space_maps:
+                table.add_row(
+                    f"{old.displayName} ({old.emailAddress or old.accountId})",
+                    str(len(spaces)),
+                    str(sum(len(space.permissions or []) for space in spaces)),
+                )
+            console.print(table)
+            console.print(f"Total permissions matched: {total}")
+        else:
+            console.print(
+                f"Done. Total permissions matched: {total}, reassigned: {changed}"
+            )
 
     asyncio.run(main())
 
