@@ -1,4 +1,4 @@
-from typing import Optional, List, Any, overload
+from typing import Optional, List, Any, cast
 import asyncio
 from enum import Enum
 
@@ -98,7 +98,7 @@ class JiraClient(BaseClient):
         self, field_name: str, user: User, project_key: Optional[str] = None
     ) -> List[str]:
         """Search for issue keys where the given user is set in the specified user field."""
-        jql_parts = [f"{field_name} = {user.accountId}"]
+        jql_parts: list[str] = [f"{field_name} = {user.accountId}"]
         if project_key:
             jql_parts.append(f"project = {project_key}")
         jql = " AND ".join(jql_parts)
@@ -117,8 +117,15 @@ class JiraClient(BaseClient):
                     },
                 )
             issues = resp.get("issues", [])
-            keys.extend([i["key"] for i in issues])
-            if next_page_token := resp.get("nextPageToken"):
+            assert isinstance(issues, list)
+            issues = cast(List, issues)
+            keys.extend(
+                key
+                for issue in issues
+                if isinstance(issue, dict)
+                if isinstance(key := issue.get("key"), str)
+            )
+            if next_page_token := str(resp.get("nextPageToken", "")):
                 continue
             return keys
 
@@ -160,35 +167,34 @@ class JiraClient(BaseClient):
                     issue_keys[i : i + batch_size]
                     for i in range(0, len(issue_keys), batch_size)
                 )
-            )
+            ),
+            return_exceptions=True,
         )
         return [resp.get("taskId", "") for resp in responses if isinstance(resp, dict)]
 
-    @overload
-    async def get_task_status(self, *, task_id: str, batch_index: int = 0) -> Task: ...
-    @overload
-    async def get_task_status(
-        self, *, task: Optional[Task], batch_index: int = 0
-    ) -> Task: ...
-
     async def get_task_status(
         self,
-        *,
-        task_id: Optional[str] = None,
-        task: Optional[Task] = None,
+        task: Task | str,
         batch_index: int = 0,
     ) -> Task:
         """Get the status of a bulk operation task"""
-        if task is not None:
+        if isinstance(task, Task):
             task_id = task.taskId
+            curr_task = task
+        elif isinstance(task, str):
+            task_id = task
+            curr_task = None
+        else:
+            raise ValueError()
+
         async with self._rate_limit(stagger_order=batch_index):
             resp = await self.request("GET", f"/rest/api/3/bulk/queue/{task_id}")
         new_task = Task(**resp)
 
-        if task is not None:
-            task.status = new_task.status
-            task.progressPercent = new_task.progressPercent
-            task.totalIssueCount = new_task.totalIssueCount
-            task.processedAccessibleIssues = new_task.processedAccessibleIssues
-            return task
+        if curr_task is not None:
+            curr_task.status = new_task.status
+            curr_task.progressPercent = new_task.progressPercent
+            curr_task.totalIssueCount = new_task.totalIssueCount
+            curr_task.processedAccessibleIssues = new_task.processedAccessibleIssues
+            return curr_task
         return new_task

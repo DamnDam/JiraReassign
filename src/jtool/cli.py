@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, cast
 import asyncio
 import csv
 from dataclasses import dataclass
@@ -59,7 +59,6 @@ def get_jira_client(conf: CLIContext) -> JiraClient:
     """Helper to create a JiraClient from CLIContext.
     Should be used in an async with block.
     """
-    assert isinstance(conf, CLIContext)
     return JiraClient(
         console=conf.console,
         base_url=conf.settings.base_url,
@@ -75,7 +74,6 @@ def get_confluence_client(conf: CLIContext):
     """Helper to create a ConfluenceClient from CLIContext.
     Should be used in an async with block.
     """
-    assert isinstance(conf, CLIContext)
     return ConfluenceClient(
         console=conf.console,
         base_url=conf.settings.base_url,
@@ -101,7 +99,7 @@ def init(
         raise typer.Exit(1)
 
     try:
-        settings = Settings(_env_file=env_file) if env_file else Settings()  # pyright: ignore[reportCallIssue]
+        settings = Settings(_env_file=env_file) if env_file else Settings()
     except ValidationError as e:
         console.log_error(
             "Environment not configured correctly. Please export appropriate environment variables:\n"
@@ -117,8 +115,7 @@ def check_connection(
     ctx: typer.Context,
 ):
     """Check connection to Jira with provided settings."""
-    conf: CLIContext = ctx.obj
-    assert isinstance(ctx.obj, CLIContext)
+    conf = cast(CLIContext, ctx.obj)
     settings = conf.settings
     console = conf.console
 
@@ -147,8 +144,7 @@ def find_users(
     ),
 ):
     """Find and display user information for given identifiers."""
-    conf: CLIContext = ctx.obj
-    assert isinstance(conf, CLIContext)
+    conf = cast(CLIContext, ctx.obj)
     console = conf.console
 
     async def main():
@@ -180,8 +176,7 @@ def remap_callback(
     ),
 ):
     """Initialize remappping."""
-    conf: CLIContext = ctx.obj
-    assert isinstance(conf, CLIContext)
+    conf = cast(CLIContext, ctx.obj)
     console = conf.console
     progress = conf.progress
     settings = conf.settings
@@ -252,8 +247,7 @@ def remap_filters(
     ),
 ):
     """Reassign filters from old -> new users according to the CSV mapping."""
-    conf: RemapContext = ctx.obj
-    assert isinstance(conf, RemapContext)
+    conf = cast(RemapContext, ctx.obj)
     console = conf.console
     progress = conf.progress
 
@@ -347,8 +341,7 @@ def remap_issues(
     ),
 ):
     """Reassign issues from old -> new users according to the CSV mapping."""
-    conf: RemapContext = ctx.obj
-    assert isinstance(conf, RemapContext)
+    conf = cast(RemapContext, ctx.obj)
     console = conf.console
     progress = conf.progress
 
@@ -373,17 +366,10 @@ def remap_issues(
                     batch_index: int = 0,
                 ) -> Task:
                     nonlocal user_changed
-                    if isinstance(task_identifier, str):
-                        task = await client.get_task_status(
-                            task_id=task_identifier,
-                            batch_index=batch_index,
-                        )
-                    else:
-                        task = task_identifier
-                        await client.get_task_status(
-                            task=task,
-                            batch_index=batch_index,
-                        )
+                    task = await client.get_task_status(
+                        task_identifier,
+                        batch_index=batch_index,
+                    )
                     if task.is_finished:
                         user_changed += len(task.processedAccessibleIssues)
                         task.progressPercent = 100
@@ -503,8 +489,7 @@ def remap_spaces(
     ),
 ):
     """Reassign Confluence spaces from old -> new users according to the CSV mapping."""
-    conf: RemapContext = ctx.obj
-    assert isinstance(conf, RemapContext)
+    conf = cast(RemapContext, ctx.obj)
     console = conf.console
     progress = conf.progress
 
@@ -580,14 +565,15 @@ def remap_spaces(
                         new,
                         [
                             Space(
-                                **{
-                                    **space.model_dump(),
-                                    "permissions": [
-                                        perm
-                                        for perm in (space.permissions or [])
-                                        if perm.subject.identifier == old.accountId
-                                    ],
-                                },
+                                id=space.id,
+                                key=space.key,
+                                name=space.name,
+                                type=space.type,
+                                permissions=[
+                                    perm
+                                    for perm in (space.permissions or [])
+                                    if perm.subject.identifier == old.accountId
+                                ],
                             )
                             for space in all_spaces
                             if any(

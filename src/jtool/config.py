@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +28,12 @@ class Settings(BaseSettings):
         le=20,
         alias="JTOOL_CONCURRENCY",
     )
+
+    def __init__(self, _env_file: Optional[str] = None, **kwargs):
+        if _env_file is not None:
+            super().__init__(_env_file=_env_file, **kwargs)
+        else:
+            super().__init__(**kwargs)
 
     model_config = SettingsConfigDict(
         env_prefix="JTOOL_",

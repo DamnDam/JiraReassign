@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Optional, Any, Self
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -59,13 +59,13 @@ class BaseClient:
             timeout=30.0,
         )
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
 
     @property
@@ -157,7 +157,7 @@ class BaseClient:
         *,
         params: Optional[dict[str, Any]] = None,
         json: Optional[Any] = None,
-    ) -> Any:
+    ) -> dict[str, Any]:
         """Make a generic API request."""
         resp = await self._client.request(method, url, params=params, json=json)
         try:
@@ -166,10 +166,11 @@ class BaseClient:
             raise self._build_error(exc) from exc
 
         return (
-            resp.json()
+            resp_json
             if any(
                 ct.startswith("application/json")
                 for ct in resp.headers.get("content-type", "").split(",")
             )
+            and isinstance(resp_json := resp.json(), dict)
             else {}
         )
