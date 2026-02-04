@@ -1,6 +1,10 @@
-from typing import Optional
+from typing import Optional, TypeVar
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .client.base import BaseClient
+
+ClientType = TypeVar("ClientType", bound=BaseClient)
 
 
 class Settings(BaseSettings):
@@ -29,11 +33,19 @@ class Settings(BaseSettings):
         alias="JTOOL_CONCURRENCY",
     )
 
-    def __init__(self, _env_file: Optional[str] = None, **kwargs):
-        if _env_file is not None:
-            super().__init__(_env_file=_env_file, **kwargs)
+    def get_client(self, client_type: type[ClientType]) -> ClientType:
+        """Instantiate a client of the specified type using the current settings."""
+        return client_type(
+            base_url=self.base_url,
+            concurrency=self.concurrency,
+            auth=(self.email, self.api_token.get_secret_value()),
+        )
+
+    def __init__(self, env_file: Optional[str] = None):
+        if env_file is not None:
+            super().__init__(_env_file=env_file)
         else:
-            super().__init__(**kwargs)
+            super().__init__()
 
     model_config = SettingsConfigDict(
         env_prefix="JTOOL_",

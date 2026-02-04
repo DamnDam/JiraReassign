@@ -1,8 +1,8 @@
-from typing import Optional, List
+from typing import Optional, cast
 
 import pydantic
 
-from .base import BaseClient, AtlassianApiError
+from .base import BaseClient, APIHTTPError, logger, handle_api_errors
 
 
 class SpacePermOperationV1(pydantic.BaseModel):
@@ -58,16 +58,20 @@ class Space(pydantic.BaseModel):
     key: str
     name: str
     type: str
-    permissions: Optional[List[SpacePermissionV1]] = None
+    permissions: Optional[list[SpacePermissionV1]] = None
 
 
 class ConfluenceClient(BaseClient):
+    """Client for interacting with the Confluence API."""
+
+    @handle_api_errors
     async def acquire_admin(self) -> None:
         """Acquire admin access for the current session."""
         async with self._rate_limit():
             await self.request("POST", "/wiki/api/v2/admin-key")
 
-    async def list_spaces(self) -> List[Space]:
+    @handle_api_errors
+    async def list_spaces(self) -> list[Space]:
         """List all Confluence spaces."""
         async with self._rate_limit():
             resp = await self.request(
@@ -76,19 +80,22 @@ class ConfluenceClient(BaseClient):
                 params={"limit": 100},
             )
 
-        results = resp.get("results", [])
-        links = resp.get("_links", {})
-
-        while "next" in links:
-            async with self._rate_limit():
-                resp = await self.request("GET", links["next"])
-
+        results = []
+        while True:
+            assert isinstance(resp, dict)
             results.extend(resp.get("results", []))
             links = resp.get("_links", {})
+            assert isinstance(links, dict)
+            next_page = cast(str, links.get("next", ""))
+            if not next_page:
+                break
+            async with self._rate_limit():
+                resp = await self.request("GET", next_page)
 
-        return [Space(**space) for space in results]
+        return [Space.model_validate(space) for space in results]
 
-    async def list_space_permissions(self, space: Space) -> List[SpacePermissionV1]:
+    @handle_api_errors
+    async def list_space_permissions(self, space: Space) -> list[SpacePermissionV1]:
         """List permissions for a specific Confluence space."""
         async with self._rate_limit():
             resp = await self.request(
@@ -97,20 +104,24 @@ class ConfluenceClient(BaseClient):
                 params={"limit": 100},
             )
 
-        results = resp.get("results", [])
-        links = resp.get("_links", {})
-
-        while "next" in links:
-            async with self._rate_limit():
-                resp = await self.request("GET", links["next"])
-
+        results = []
+        while True:
+            assert isinstance(resp, dict)
             results.extend(resp.get("results", []))
             links = resp.get("_links", {})
+            assert isinstance(links, dict)
+            next_page = cast(str, links.get("next", ""))
+            if not next_page:
+                break
+            async with self._rate_limit():
+                resp = await self.request("GET", next_page)
 
         return [
-            SpacePermissionV1._from_v2(SpacePermissionV2(**perm)) for perm in results
+            SpacePermissionV1._from_v2(SpacePermissionV2.model_validate(perm))
+            for perm in results
         ]
 
+    @handle_api_errors
     async def add_space_permission(
         self, space: Space, permission: SpacePermissionV1
     ) -> None:
@@ -122,17 +133,19 @@ class ConfluenceClient(BaseClient):
                     f"/wiki/rest/api/space/{space.key}/permission",
                     json=permission.model_dump(),
                 )
-        except AtlassianApiError as e:
+        except APIHTTPError as e:
             # Ignore conflict errors (permission already exists)
             if e.status_code == 409 or (
                 e.status_code == 400
                 and "Permission already exists." in (e.response_text or "")
             ):
-                self._log_error(
+                logger.warning(
                     f"Permission {str(permission.operation)} for {str(permission.subject)} already exists in space '{space.key}', skipping."
                 )
                 return
+            raise
 
+    @handle_api_errors
     async def remove_space_permission(
         self, space: Space, permission: SpacePermissionV1
     ) -> None:
@@ -142,6 +155,7 @@ class ConfluenceClient(BaseClient):
                 "DELETE", f"/wiki/rest/api/space/{space.key}/permission/{permission.id}"
             )
 
+    @handle_api_errors
     async def rename_space(self, space: Space, new_name: str) -> None:
         """Rename a Confluence space."""
         async with self._rate_limit():

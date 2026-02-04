@@ -1,11 +1,13 @@
-from typing import Optional, Any, Self
+from typing import Optional, Any, Self, Callable, TypeVar, ParamSpec, Coroutine
+import logging
 import asyncio
 from contextlib import asynccontextmanager
+from functools import wraps
 
 import pydantic
 import httpx
 
-from ..term import DualConsole
+logger = logging.getLogger("jtool.client")
 
 
 class User(pydantic.BaseModel):
@@ -14,7 +16,15 @@ class User(pydantic.BaseModel):
     displayName: Optional[str]
 
 
-class AtlassianApiError(Exception):
+class APIError(Exception):
+    """Generic API error."""
+
+    pass
+
+
+class APIHTTPError(APIError):
+    """Exception raised for API errors with detailed request and response information."""
+
     def __init__(
         self,
         status_code: int,
@@ -42,15 +52,72 @@ class AtlassianApiError(Exception):
         return base
 
 
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def handle_api_errors(
+    func: Callable[P, Coroutine[Any, Any, T]],
+) -> Callable[P, Coroutine[Any, Any, T]]:
+    """Decorator to wrap API calls and raise APIError."""
+
+    def _mask_headers(headers: Any) -> dict[str, Any]:
+        try:
+            items = dict(headers)
+        except Exception:
+            items = {}
+        masked = {}
+        for k, v in items.items():
+            lk = k.lower()
+            if lk in ("authorization", "cookie"):
+                masked[k] = "[secure]"
+            else:
+                masked[k] = v
+        return masked
+
+    @wraps(func)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        try:
+            return await func(*args, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            req = exc.request
+            resp = exc.response
+            assert isinstance(req, httpx.Request)
+            raise APIHTTPError(
+                status_code=resp.status_code,
+                reason=resp.reason_phrase or "",
+                method=req.method,
+                url=str(req.url),
+                request_headers=_mask_headers(req.headers),
+                request_body=(
+                    req.content.decode("utf-8", "replace") if req.content else None
+                ),
+                response_headers=_mask_headers(resp.headers),
+                response_json=(
+                    resp.json()
+                    if any(
+                        ct.find("application/json") != -1
+                        for ct in resp.headers.get("content-type", "").split(",")
+                    )
+                    else None
+                ),
+                response_text=resp.text,
+            ) from exc
+        except (AssertionError, pydantic.ValidationError, ValueError) as exc:
+            raise APIError(f"{exc.__class__.__name__} during API call:  {exc}") from exc
+
+    return wrapper
+
+
 class BaseClient:
+    """Base client for making API requests with rate limiting and error handling."""
+
     def __init__(
         self,
-        console: DualConsole,
         base_url: str,
         concurrency: int,
         auth: tuple[str, str],
     ) -> None:
-        self._console = console
         self._semaphore = asyncio.Semaphore(concurrency)
         self._client = httpx.AsyncClient(
             base_url=base_url,
@@ -67,76 +134,6 @@ class BaseClient:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.close()
-
-    @property
-    def _log_error(self):
-        return self._console.log_error
-
-    def _mask_headers(self, headers: Any) -> dict:
-        try:
-            items = dict(headers)
-        except Exception:
-            items = {}
-        masked = {}
-        for k, v in items.items():
-            lk = k.lower()
-            if lk in ("authorization", "cookie"):
-                masked[k] = "[secure]"
-            else:
-                masked[k] = v
-        return masked
-
-    def _build_error(self, exc: Exception) -> Exception:
-        if not isinstance(exc, httpx.HTTPStatusError):
-            return exc
-
-        req = exc.request
-        resp = exc.response
-        # request body
-        if req.content:
-            try:
-                req_body = (
-                    req.content.decode("utf-8", "replace")
-                    if isinstance(req.content, (bytes, bytearray))
-                    else str(req.content)
-                )
-            except Exception:
-                req_body = None
-        else:
-            req_body = None
-        # response body
-        resp_json: Optional[Any] = None
-        resp_text: Optional[str] = None
-        if any(
-            ct.startswith("application/json")
-            for ct in resp.headers.get("content-type", "").split(",")
-        ):
-            try:
-                resp_json = resp.json()
-            except Exception:
-                try:
-                    resp_text = resp.text
-                except Exception:
-                    resp_text = None
-            else:
-                resp_text = resp.text
-        else:
-            try:
-                resp_text = resp.text
-            except Exception:
-                resp_text = None
-
-        return AtlassianApiError(
-            status_code=resp.status_code,
-            reason=resp.reason_phrase or "",
-            method=req.method,
-            url=str(req.url),
-            request_headers=self._mask_headers(req.headers),
-            request_body=req_body,
-            response_headers=dict(resp.headers),
-            response_json=resp_json,
-            response_text=resp_text,
-        )
 
     @asynccontextmanager
     async def _rate_limit(self, stagger_order: int = 0, delay: float = 0.1):
@@ -157,20 +154,17 @@ class BaseClient:
         *,
         params: Optional[dict[str, Any]] = None,
         json: Optional[Any] = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[Any]:
         """Make a generic API request."""
         resp = await self._client.request(method, url, params=params, json=json)
-        try:
-            resp.raise_for_status()
-        except Exception as exc:
-            raise self._build_error(exc) from exc
+        resp.raise_for_status()
 
         return (
             resp_json
             if any(
-                ct.startswith("application/json")
+                ct.find("application/json") != -1
                 for ct in resp.headers.get("content-type", "").split(",")
             )
-            and isinstance(resp_json := resp.json(), dict)
+            and isinstance(resp_json := resp.json(), (dict, list))
             else {}
         )

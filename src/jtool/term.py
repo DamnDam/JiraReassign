@@ -1,6 +1,10 @@
-from typing import Optional
+from typing import Iterable, Tuple
+import logging
 
-from rich.console import Console, RenderableType
+from rich.logging import RichHandler
+from rich.console import Console as RichConsole, RenderableType
+from rich.table import Table
+from rich.style import Style
 from rich.progress import (
     Progress,
     SpinnerColumn,
@@ -11,67 +15,92 @@ from rich.progress import (
 )
 
 
-class DualConsole:
-    """A Rich console that can log to both stdout and stderr, with error buffering.
-    Use as a context manager to buffer error messages until exit on stderr while still printing them to stdout immediately.
-    This is useful for ensuring stderr messages do not interfere with Rich progress bars.
-    """
+class BufferedHandler(RichHandler):
+    """A logging handler that buffers log records until flushed."""
+
+    _buffer: list[logging.LogRecord]
+    auto_flush: bool = True
+
+    def _get_buffer(self) -> list[logging.LogRecord]:
+        if not hasattr(self, "_buffer"):
+            self._buffer = []
+        return self._buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self.auto_flush:
+            super().emit(record)
+        else:
+            self._get_buffer().append(record)
+
+    def flush(self) -> None:
+        for record in self._get_buffer():
+            super().emit(record)
+        self._get_buffer().clear()
+
+
+class Console:
+    """A Rich console wrapper for logging and table rendering."""
+
+    _console: RichConsole
+    _progress: Progress
+    _handler: BufferedHandler
 
     def __init__(self) -> None:
-        self._console = Console()
-        self._do_buffer = False
-        self._err_console = Console(stderr=True)
-        self._err_buffer: list[tuple[RenderableType, ...]] = []
+        self._console = RichConsole()
+        self._handler = BufferedHandler(
+            console=self._console,
+            show_time=False,
+            show_path=False,
+        )
 
-    def log_error(
-        self, *message: RenderableType, force_flush: Optional[bool] = None
-    ) -> None:
-        """Log an error message to the standard console and buffer for stderr."""
-        if force_flush is None:
-            do_flush = not self._do_buffer
-        else:
-            do_flush = force_flush
-        self._err_buffer.append(message)
-        if do_flush:
-            self.flush_errors()
-        else:
-            self._console.print(*message)
-
-    def flush_errors(self) -> None:
-        """Flush buffered error messages to the error console."""
-        for msg in self._err_buffer:
-            self._err_console.print(*msg, style="red")
-        self._err_buffer.clear()
+    def add_logger(self, logger: logging.Logger) -> None:
+        """Add a logger to the internal BufferedHandler."""
+        logger.addHandler(self._handler)
 
     @property
     def print(self):
         """Get the standard console print method."""
         return self._console.print
 
+    def render_table(
+        self,
+        headers: Iterable[Tuple[RenderableType, str | Style | None]],
+        iter: Iterable[Tuple[RenderableType, ...]],
+    ) -> None:
+        """Render a table to the standard console."""
+        table = Table(show_header=True, header_style="bold")
+        for header in headers:
+            table.add_column(header[0], style=header[1])
+        for row in iter:
+            table.add_row(*[str(cell) for cell in row])
+        self._console.print(table)
+
+    @property
+    def progress(self) -> Progress:
+        """Create a Rich Progress instance with standard columns."""
+        if not hasattr(self, "_progress"):
+            self._progress = Progress(
+                SpinnerColumn("point"),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=self._console,
+            )
+        return self._progress
+
     def __enter__(self):
-        self._do_buffer = True
+        self._handler.auto_flush = False
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._do_buffer = False
-        self.flush_errors()
+        self._handler.flush()
+        self._handler.auto_flush = True
 
     async def __aenter__(self):
-        self._do_buffer = True
+        self._handler.auto_flush = False
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
-        self._do_buffer = False
-        self.flush_errors()
-
-
-def create_progress(console: DualConsole) -> Progress:
-    """Create a Rich Progress instance with standard columns."""
-    return Progress(
-        SpinnerColumn("point"),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        console=console._console,
-    )
+        self._handler.flush()
+        self._handler.auto_flush = True

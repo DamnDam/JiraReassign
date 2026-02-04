@@ -1,4 +1,5 @@
 from typing import Optional, cast
+import logging
 import asyncio
 import csv
 from dataclasses import dataclass
@@ -7,35 +8,23 @@ from itertools import chain
 import typer
 from pydantic import ValidationError
 
-from rich.table import Table
-
 from jtool.client.confluence import Space
 
-from .term import DualConsole, Progress, create_progress
+from .term import Console
 from .config import Settings
-from .client import (
-    JiraClient,
-    ConfluenceClient,
-    AtlassianApiError,
-    User,
-    Task,
-    SpacePermissionV1,
-)
+from .client.base import APIError, User
+from .client.jira import JiraClient, Task
+from .client.confluence import ConfluenceClient, SpacePermissionV1
+
+logger = logging.getLogger("jtool.cli")
 
 
 @dataclass
 class CLIContext:
     """Context for CLI commands."""
 
-    console: DualConsole
+    console: Console
     settings: Settings
-
-    @property
-    def progress(self) -> Progress:
-        """Create a Rich Progress instance."""
-        if not hasattr(self, "_progress"):
-            self._progress = create_progress(self.console)
-        return self._progress
 
 
 @dataclass
@@ -55,36 +44,6 @@ remap = typer.Typer(
 app.add_typer(remap, name="remap")
 
 
-def get_jira_client(conf: CLIContext) -> JiraClient:
-    """Helper to create a JiraClient from CLIContext.
-    Should be used in an async with block.
-    """
-    return JiraClient(
-        console=conf.console,
-        base_url=conf.settings.base_url,
-        concurrency=conf.settings.concurrency,
-        auth=(
-            conf.settings.email,
-            conf.settings.api_token.get_secret_value(),
-        ),
-    )
-
-
-def get_confluence_client(conf: CLIContext):
-    """Helper to create a ConfluenceClient from CLIContext.
-    Should be used in an async with block.
-    """
-    return ConfluenceClient(
-        console=conf.console,
-        base_url=conf.settings.base_url,
-        concurrency=conf.settings.concurrency,
-        auth=(
-            conf.settings.email,
-            conf.settings.api_token.get_secret_value(),
-        ),
-    )
-
-
 @app.callback(invoke_without_command=True)
 def init(
     ctx: typer.Context,
@@ -93,15 +52,17 @@ def init(
     ),
 ):
     """Jira Reassign CLI Tool."""
-    console = DualConsole()
+    console = Console()
+    console.add_logger(logger)
+    console.add_logger(logging.getLogger("jtool.client"))
     if ctx.invoked_subcommand is None:
-        console.log_error(ctx.get_help())
+        console.print(ctx.get_help())
         raise typer.Exit(1)
 
     try:
-        settings = Settings(_env_file=env_file) if env_file else Settings()
+        settings = Settings(env_file=env_file)
     except ValidationError as e:
-        console.log_error(
+        logger.error(
             "Environment not configured correctly. Please export appropriate environment variables:\n"
             + "\n".join(f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()),
         )
@@ -120,15 +81,15 @@ def check_connection(
     console = conf.console
 
     async def main():
-        async with get_jira_client(conf) as client:
+        async with settings.get_client(JiraClient) as client:
             try:
                 user = await client.get_self()
                 console.print(
                     f"Connected to Jira site '{settings.base_url}' as user '{user.displayName}' ({user.emailAddress}) - {user.accountId}"
                 )
-            except AtlassianApiError as e:
-                console.log_error(
-                    f"Failed to connect to Jira: {e.status_code} {e.reason}",
+            except APIError as e:
+                logger.error(
+                    f"Failed to connect to Jira: {str(e)}",
                 )
                 raise typer.Exit(code=1)
 
@@ -145,20 +106,22 @@ def find_users(
 ):
     """Find and display user information for given identifiers."""
     conf = cast(CLIContext, ctx.obj)
+    settings = conf.settings
     console = conf.console
 
     async def main():
-        async with get_jira_client(conf) as client:
+        async with settings.get_client(JiraClient) as client:
             ids = [iden.strip() for iden in identifiers.split(",")]
             for iden in ids:
-                user = await client.resolve_user(iden)
-                if user:
-                    console.print(
-                        f"Identifier '{iden}' resolved to User: {user.displayName} ({user.emailAddress}), AccountId: '{user.accountId}'"
+                try:
+                    user = await client.resolve_user(iden)
+                except APIError as e:
+                    logger.warning(
+                        f"Error resolving identifier '{iden}': {str(e)}",
                     )
                 else:
-                    console.log_error(
-                        f"Identifier '{iden}' could not be resolved to a user.",
+                    console.print(
+                        f"Identifier '{iden}' resolved to User: {user.displayName} ({user.emailAddress}), AccountId: '{user.accountId}'"
                     )
 
     asyncio.run(main())
@@ -178,26 +141,25 @@ def remap_callback(
     """Initialize remappping."""
     conf = cast(CLIContext, ctx.obj)
     console = conf.console
-    progress = conf.progress
     settings = conf.settings
-    progress = conf.progress
+    progress = console.progress
 
     if ctx.invoked_subcommand is None:
-        console.log_error(ctx.get_help())
+        console.print(ctx.get_help())
         raise typer.Exit(1)
 
     if concurrency:
         try:
             settings.concurrency = concurrency
         except ValidationError as e:
-            console.log_error(f"Invalid concurrency value: {e}")
+            logger.error(f"Invalid concurrency value: {e}")
             raise typer.Exit(code=2)
 
     with open(mapping_csv, newline="") as fh:
         reader = csv.DictReader(fh)
         assert reader.fieldnames is not None
         if "old" not in reader.fieldnames or "new" not in reader.fieldnames:
-            console.log_error("CSV must have headers 'old' and 'new'.")
+            logger.error("CSV must have headers 'old' and 'new'.")
             raise typer.Exit(code=2)
         rows = list(reader)
 
@@ -206,7 +168,7 @@ def remap_callback(
             description=f"Resolving users ({len(rows)})...", total=len(rows)
         )
 
-        async with get_jira_client(conf) as client:
+        async with settings.get_client(JiraClient) as client:
 
             async def resolve_user_map(
                 row: dict[str, str],
@@ -214,15 +176,16 @@ def remap_callback(
                 old_user, new_user = await asyncio.gather(
                     client.resolve_user(row["old"].strip()),
                     client.resolve_user(row["new"].strip()),
+                    return_exceptions=True,
                 )
                 progress.update(progress.tasks[-1].id, advance=1)
-                if not old_user:
-                    console.log_error(f"Old user '{row['old']}' not found; skipping.")
-                    return None
-                if not new_user:
-                    console.log_error(f"New user '{row['new']}' not found; skipping.")
-                    return None
-                return (old_user, new_user)
+                if isinstance(old_user, APIError):
+                    logger.warning(f"Old user '{row['old']}' not found; skipping.")
+                if isinstance(new_user, APIError):
+                    logger.warning(f"New user '{row['new']}' not found; skipping.")
+                if isinstance(old_user, User) and isinstance(new_user, User):
+                    return (old_user, new_user)
+                return None
 
             with console, progress:
                 user_solved = await asyncio.gather(
@@ -248,15 +211,16 @@ def remap_filters(
 ):
     """Reassign filters from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
+    settings = conf.settings
     console = conf.console
-    progress = conf.progress
+    progress = console.progress
 
     async def main():
         total = 0
         changed = 0
         user_maps = conf.user_maps
-        async with get_jira_client(conf) as client:
-            with console, progress:
+        async with console, settings.get_client(JiraClient) as client:
+            with progress:
 
                 async def find_filters(user: User) -> list[str]:
                     results = await client.get_filters_for_user(user)
@@ -285,6 +249,20 @@ def remap_filters(
                     if filters
                 ]
 
+                console.render_table(
+                    [
+                        ("Old User", "cyan"),
+                        ("Total Filters", "green"),
+                    ],
+                    [
+                        (
+                            f"{old.displayName} ({old.emailAddress or old.accountId})",
+                            str(len(filters)),
+                        )
+                        for old, new, filters in filter_maps
+                    ],
+                )
+
                 progress_user = progress.add_task(
                     description=f"Remapping users ({len(filter_maps)})...",
                     total=len(filter_maps),
@@ -309,23 +287,10 @@ def remap_filters(
                     )
                     progress.update(progress_user, advance=1)
 
-        if dry_run:
-            table = Table()
-            table.add_column("Old User", style="cyan", no_wrap=True)
-            table.add_column("New User", style="cyan", no_wrap=True)
-            table.add_column("Total Filters", style="green")
-            for old, new, filters in filter_maps:
-                table.add_row(
-                    f"{old.displayName} ({old.emailAddress or old.accountId})",
-                    f"{new.displayName} ({new.emailAddress or new.accountId})",
-                    str(len(filters)),
-                )
-            console.print(table)
-            console.print(f"Total filters matched: {total}")
-        else:
-            console.print(
-                f"Done. Total filters matched: {total}, reassigned: {changed}"
-            )
+        console.print(
+            f"Done. Total filters matched: {total}",
+            f", reassigned: {changed}" if not dry_run else "",
+        )
 
     asyncio.run(main())
 
@@ -342,16 +307,17 @@ def remap_issues(
 ):
     """Reassign issues from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
+    settings = conf.settings
     console = conf.console
-    progress = conf.progress
+    progress = console.progress
 
     async def main():
         total = 0
         changed = 0
         user_changed = 0
         user_maps = conf.user_maps
-        async with get_jira_client(conf) as client:
-            with console, progress:
+        async with console, settings.get_client(JiraClient) as client:
+            with progress:
 
                 async def find_issues(field_name: str, user: User) -> list[str]:
                     results = await client.search_issue_keys_for_user_field(
@@ -407,6 +373,24 @@ def remap_issues(
                     if assigned_keys or reported_keys
                 ]
 
+                console.render_table(
+                    [
+                        ("Old User", "cyan"),
+                        ("Total Assigned", "magenta"),
+                        ("Total Reported", "magenta"),
+                        ("Total Issues", "green"),
+                    ],
+                    [
+                        (
+                            f"{old.displayName} ({old.emailAddress or old.accountId})",
+                            str(len(assigned)),
+                            str(len(reported)),
+                            str(len(assigned) + len(reported)),
+                        )
+                        for old, _, assigned, reported in issue_maps
+                    ],
+                )
+
                 progress_user = progress.add_task(
                     description=f"Remapping Users ({len(issue_maps)})...",
                     total=len(issue_maps),
@@ -460,23 +444,10 @@ def remap_issues(
                     progress.update(progress_user, advance=1)
                     changed += user_changed
 
-        if dry_run:
-            table = Table()
-            table.add_column("Old User", style="cyan", no_wrap=True)
-            table.add_column("Assigned", style="magenta")
-            table.add_column("Reported", style="magenta")
-            table.add_column("Total", style="green")
-            for old, new, assigned, reported in issue_maps:
-                table.add_row(
-                    f"{old.displayName} ({old.emailAddress or old.accountId})",
-                    str(len(assigned)),
-                    str(len(reported)),
-                    str(len(assigned) + len(reported)),
-                )
-            console.print(table)
-            console.print(f"Total issues matched: {total}")
-        else:
-            console.print(f"Done. Total issues matched: {total}, reassigned: {changed}")
+        console.print(
+            f"Done. Total issues matched: {total}",
+            f"reassigned: {changed}" if not dry_run else "",
+        )
 
     asyncio.run(main())
 
@@ -490,15 +461,16 @@ def remap_spaces(
 ):
     """Reassign Confluence spaces from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
+    settings = conf.settings
     console = conf.console
-    progress = conf.progress
+    progress = console.progress
 
     async def main():
         total = 0
         changed = 0
         user_maps = conf.user_maps
-        async with get_confluence_client(conf) as client:
-            with console, progress:
+        async with console, settings.get_client(ConfluenceClient) as client:
+            with progress:
 
                 async def retrieve_space_permissions(
                     space: Space, users: list[User]
@@ -525,9 +497,9 @@ def remap_spaces(
                         nonlocal changed
                         changed += 1
                         await client.remove_space_permission(space, perm)
-                    except AtlassianApiError as e:
-                        console.log_error(
-                            f"Failed to reassign permission {str(perm.operation)} in space '{space.key}' for {new.displayName}: {e.status_code} {e.reason}\n{e.response_json}",
+                    except APIError as e:
+                        logger.warning(
+                            f"Failed to reassign permission {str(perm.operation)} in space '{space.key}' for {new.displayName}: {str(e)}",
                         )
                     progress.update(progress.tasks[-1].id, advance=1)
 
@@ -564,7 +536,7 @@ def remap_spaces(
                         old,
                         new,
                         [
-                            Space(
+                            Space.model_construct(
                                 id=space.id,
                                 key=space.key,
                                 name=space.name,
@@ -590,6 +562,22 @@ def remap_spaces(
                     )
                 ]
 
+                console.render_table(
+                    [
+                        ("Old User", "cyan"),
+                        ("Total Spaces", "green"),
+                        ("Total Permissions", "green"),
+                    ],
+                    [
+                        (
+                            f"{old.displayName} ({old.emailAddress or old.accountId})",
+                            str(len(spaces)),
+                            str(sum(len(space.permissions or []) for space in spaces)),
+                        )
+                        for old, new, spaces in space_maps
+                    ],
+                )
+
                 progress_user = progress.add_task(
                     description=f"Remapping users ({len(space_maps)})...",
                     total=len(space_maps),
@@ -614,26 +602,9 @@ def remap_spaces(
                     )
                     progress.update(progress_user, advance=1)
 
-        if dry_run:
-            table = Table()
-            table.add_column("Old User", style="cyan", no_wrap=True)
-            table.add_column("Total Spaces", style="green")
-            table.add_column("Total Permissions", style="green")
-            for old, new, spaces in space_maps:
-                table.add_row(
-                    f"{old.displayName} ({old.emailAddress or old.accountId})",
-                    str(len(spaces)),
-                    str(sum(len(space.permissions or []) for space in spaces)),
-                )
-            console.print(table)
-            console.print(f"Total permissions matched: {total}")
-        else:
-            console.print(
-                f"Done. Total permissions matched: {total}, reassigned: {changed}"
-            )
+        console.print(
+            f"Done. Total permissions matched: {total}",
+            f", reassigned: {changed}" if not dry_run else "",
+        )
 
     asyncio.run(main())
-
-
-if __name__ == "__main__":
-    app()
