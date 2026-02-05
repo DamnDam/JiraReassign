@@ -1,5 +1,5 @@
 default_install_hook_types:
-  - pre-commit
+  - pre-push
   - post-checkout
   - post-merge
   - post-rewrite
@@ -10,11 +10,22 @@ repos:
       - id: uv-sync
         stages: [post-checkout, post-merge, post-rewrite]
       - id: uv-lock
-        stages: [pre-commit]
+        stages: [pre-push]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.14
     hooks:
       - id: ruff-check
-        stages: [pre-commit]
+        stages: [pre-push]
       - id: ruff-format
-        stages: [pre-commit]
+        stages: [pre-push]
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty check
+        entry: uvx ty check
+        args: ["--python", ".venv/"]
+        language: python
+        types: [python]
+        pass_filenames: true
+        stages: [pre-push]
+        additional_dependencies: ["uv==0.9.30"]
