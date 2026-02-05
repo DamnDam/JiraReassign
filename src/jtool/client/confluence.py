@@ -1,8 +1,8 @@
-from typing import Optional, cast
+from typing import Optional
 
 import pydantic
 
-from .base import BaseClient, APIHTTPError, logger, handle_api_errors
+from .base import BaseClient, APIError, APIHTTPError, logger, handle_api_errors
 
 
 class SpacePermOperationV1(pydantic.BaseModel):
@@ -61,16 +61,47 @@ class Space(pydantic.BaseModel):
     permissions: Optional[list[SpacePermissionV1]] = None
 
 
+class ConfluenceAPIError(APIError):
+    """Exception raised for Confluence API errors."""
+
+    ...
+
+
+def confluence_errors(exc: Exception) -> Exception:
+    if isinstance(exc, APIHTTPError):
+        if isinstance(exc.response_json, dict):
+            if isinstance(data := exc.response_json.get("data"), dict):
+                if isinstance(errors := data.get("errors"), list) and errors:
+                    err_msg = "; ".join(
+                        msg.get("translation", "-")
+                        for err in errors
+                        if isinstance(err, dict)
+                        if isinstance(msg := err.get("message", {}), dict)
+                    )
+                    return ConfluenceAPIError(err_msg)
+            if isinstance(errors := exc.response_json.get("errors"), list) and errors:
+                err_msg = "; ".join(
+                    f"{err.get('title', '-')} - {err.get('detail', None)}"
+                    for err in errors
+                    if isinstance(err, dict)
+                )
+                return ConfluenceAPIError(err_msg)
+    return exc
+
+
+handle_confluence_errors = handle_api_errors(confluence_errors)
+
+
 class ConfluenceClient(BaseClient):
     """Client for interacting with the Confluence API."""
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def acquire_admin(self) -> None:
         """Acquire admin access for the current session."""
         async with self._rate_limit():
             await self.request("POST", "/wiki/api/v2/admin-key")
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def list_spaces(self) -> list[Space]:
         """List all Confluence spaces."""
         async with self._rate_limit():
@@ -86,7 +117,7 @@ class ConfluenceClient(BaseClient):
             results.extend(resp.get("results", []))
             links = resp.get("_links", {})
             assert isinstance(links, dict)
-            next_page = cast(str, links.get("next", ""))
+            next_page = links.get("next", "")
             if not next_page:
                 break
             async with self._rate_limit():
@@ -94,7 +125,7 @@ class ConfluenceClient(BaseClient):
 
         return [Space.model_validate(space) for space in results]
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def list_space_permissions(self, space: Space) -> list[SpacePermissionV1]:
         """List permissions for a specific Confluence space."""
         async with self._rate_limit():
@@ -110,7 +141,7 @@ class ConfluenceClient(BaseClient):
             results.extend(resp.get("results", []))
             links = resp.get("_links", {})
             assert isinstance(links, dict)
-            next_page = cast(str, links.get("next", ""))
+            next_page = links.get("next", "")
             if not next_page:
                 break
             async with self._rate_limit():
@@ -121,7 +152,7 @@ class ConfluenceClient(BaseClient):
             for perm in results
         ]
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def add_space_permission(
         self, space: Space, permission: SpacePermissionV1
     ) -> None:
@@ -145,7 +176,7 @@ class ConfluenceClient(BaseClient):
                 return
             raise
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def remove_space_permission(
         self, space: Space, permission: SpacePermissionV1
     ) -> None:
@@ -155,7 +186,7 @@ class ConfluenceClient(BaseClient):
                 "DELETE", f"/wiki/rest/api/space/{space.key}/permission/{permission.id}"
             )
 
-    @handle_api_errors
+    @handle_confluence_errors
     async def rename_space(self, space: Space, new_name: str) -> None:
         """Rename a Confluence space."""
         async with self._rate_limit():

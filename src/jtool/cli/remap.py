@@ -53,14 +53,17 @@ def remap_callback(
             settings.concurrency = concurrency
         except ValidationError as e:
             logger.error(f"Invalid concurrency value: {e}")
-            raise typer.Exit(code=2)
+            raise typer.Exit(1)
 
     with open(mapping_csv, newline="") as fh:
         reader = csv.DictReader(fh)
-        assert reader.fieldnames is not None
-        if "old" not in reader.fieldnames or "new" not in reader.fieldnames:
+        if (
+            reader.fieldnames is None
+            or "old" not in reader.fieldnames
+            or "new" not in reader.fieldnames
+        ):
             logger.error("CSV must have headers 'old' and 'new'.")
-            raise typer.Exit(code=2)
+            raise typer.Exit(2)
         rows = list(reader)
 
     async def main(rows: list[dict[str, str]]):
@@ -80,9 +83,13 @@ def remap_callback(
                 )
                 progress.update(progress.tasks[-1].id, advance=1)
                 if isinstance(old_user, APIError):
-                    logger.warning(f"Old user '{row['old']}' not found; skipping.")
+                    logger.warning(
+                        f"Old user '{row['old']}' not found; skipping. {str(old_user)}"
+                    )
                 if isinstance(new_user, APIError):
-                    logger.warning(f"New user '{row['new']}' not found; skipping.")
+                    logger.warning(
+                        f"New user '{row['new']}' not found; skipping. {str(new_user)}"
+                    )
                 if isinstance(old_user, User) and isinstance(new_user, User):
                     return (old_user, new_user)
                 return None
@@ -404,8 +411,6 @@ def remap_spaces(
                     progress.update(progress.tasks[-1].id, advance=1)
 
                 async def reassign_space(space: Space, new: User) -> None:
-                    assert space.permissions is not None
-
                     await asyncio.gather(
                         *[
                             reassign_perm(space, perm, new)

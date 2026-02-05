@@ -1,4 +1,4 @@
-from typing import Optional, Any, Self, Callable, TypeVar, ParamSpec, Coroutine
+from typing import Optional, Any, Self, Callable, TypeVar, ParamSpec, Awaitable
 import logging
 import asyncio
 from contextlib import asynccontextmanager
@@ -54,11 +54,12 @@ class APIHTTPError(APIError):
 
 P = ParamSpec("P")
 T = TypeVar("T")
+Func = TypeVar("Func", bound=Callable[P, Awaitable[T]])
 
 
 def handle_api_errors(
-    func: Callable[P, Coroutine[Any, Any, T]],
-) -> Callable[P, Coroutine[Any, Any, T]]:
+    extra_handler: Optional[Callable[[Exception], Exception]] = None,
+) -> Callable[[Func], Func]:
     """Decorator to wrap API calls and raise APIError."""
 
     def _mask_headers(headers: Any) -> dict[str, Any]:
@@ -75,42 +76,54 @@ def handle_api_errors(
                 masked[k] = v
         return masked
 
-    @wraps(func)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        try:
-            return await func(*args, **kwargs)
-        except httpx.HTTPStatusError as exc:
-            req = exc.request
-            resp = exc.response
-            assert isinstance(req, httpx.Request)
-            raise APIHTTPError(
-                status_code=resp.status_code,
-                reason=resp.reason_phrase or "",
-                method=req.method,
-                url=str(req.url),
-                request_headers=_mask_headers(req.headers),
-                request_body=(
-                    req.content.decode("utf-8", "replace") if req.content else None
-                ),
-                response_headers=_mask_headers(resp.headers),
-                response_json=(
-                    resp.json()
-                    if any(
-                        ct.find("application/json") != -1
-                        for ct in resp.headers.get("content-type", "").split(",")
-                    )
-                    else None
-                ),
-                response_text=resp.text,
-            ) from exc
-        except (AssertionError, pydantic.ValidationError, ValueError) as exc:
-            raise APIError(f"{exc.__class__.__name__} during API call:  {exc}") from exc
+    def _decorator(
+        func: Func,
+    ) -> Callable[..., Awaitable[T]]:
+        @wraps(func)
+        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+            try:
+                return await func(*args, **kwargs)
+            except httpx.HTTPStatusError as exc:
+                req = exc.request
+                resp = exc.response
+                assert isinstance(resp, httpx.Response)
+                new_exc = APIHTTPError(
+                    status_code=resp.status_code,
+                    reason=resp.reason_phrase or "",
+                    method=req.method,
+                    url=str(req.url),
+                    request_headers=_mask_headers(req.headers),
+                    request_body=(
+                        req.content.decode("utf-8", "replace") if req.content else None
+                    ),
+                    response_headers=_mask_headers(resp.headers),
+                    response_json=(
+                        resp.json()
+                        if any(
+                            ct.find("application/json") != -1
+                            for ct in resp.headers.get("content-type", "").split(",")
+                        )
+                        else None
+                    ),
+                    response_text=resp.text,
+                )
+            except Exception as exc:
+                new_exc = exc
 
-    return wrapper
+            if extra_handler:
+                raise extra_handler(new_exc)
+            raise new_exc
+
+        return wrapper
+
+    return _decorator
 
 
 class BaseClient:
     """Base client for making API requests with rate limiting and error handling."""
+
+    _semaphore: asyncio.Semaphore
+    _client: httpx.AsyncClient
 
     def __init__(
         self,

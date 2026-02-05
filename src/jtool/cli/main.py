@@ -42,7 +42,7 @@ def init(
             "Environment not configured correctly. Please export appropriate environment variables:\n"
             + "\n".join(f"- {err['loc'][0]}: {err['msg']}" for err in e.errors()),
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(2)
 
     ctx.obj = CLIContext(console=console, settings=settings)
 
@@ -67,7 +67,7 @@ def check_connection(
                 logger.error(
                     f"Failed to connect to Jira: {str(e)}",
                 )
-                raise typer.Exit(code=1)
+                raise typer.Exit(10)
 
     asyncio.run(main())
 

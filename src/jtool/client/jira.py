@@ -4,7 +4,7 @@ from enum import Enum
 
 import pydantic
 
-from .base import BaseClient, User, APIError, logger, handle_api_errors
+from .base import BaseClient, User, APIError, APIHTTPError, logger, handle_api_errors
 
 
 class TaskStatus(str, Enum):
@@ -35,17 +35,43 @@ class Task(pydantic.BaseModel):
         }
 
 
+class JiraAPIError(APIError):
+    """Exception raised for Jira API errors."""
+
+    ...
+
+
+def jira_errors(exc: Exception) -> Exception:
+    if isinstance(exc, APIHTTPError):
+        if isinstance(exc.response_json, dict):
+            if error_messages := exc.response_json.get("errorMessages"):
+                if isinstance(error_messages, list) and error_messages:
+                    return JiraAPIError("; ".join(error_messages))
+
+            if isinstance(errors := exc.response_json.get("errors"), list) and errors:
+                error_messages = [
+                    err.get("message")
+                    for err in errors
+                    if isinstance(err, dict)  # fmt: keep
+                ]
+                return JiraAPIError("; ".join(error_messages))
+    return exc
+
+
+handle_jira_errors = handle_api_errors(jira_errors)
+
+
 class JiraClient(BaseClient):
     """Client for interacting with the Jira Cloud API."""
 
-    @handle_api_errors
+    @handle_jira_errors
     async def get_self(self) -> User:
         """Get information about the authenticated user."""
         async with self._rate_limit():
             resp = await self.request("GET", "/rest/api/3/myself")
         return User.model_validate(resp)
 
-    @handle_api_errors
+    @handle_jira_errors
     async def resolve_user(self, identifier: str) -> User:
         """Resolve a user identifier (email or accountId) to a Jira Cloud accountId."""
         async with self._rate_limit():
@@ -63,13 +89,13 @@ class JiraClient(BaseClient):
                     return u
         raise APIError(f"No exact match found for '{identifier}'")
 
-    @handle_api_errors
+    @handle_jira_errors
     async def get_filters_for_user(self, user: User) -> list[str]:
         """Get the IDs of filters owned by the given user."""
         async with self._rate_limit():
             resp = await self.request(
                 "GET",
-                "/rest/api/2/filter/search",
+                "/rest/api/3/filter/search",
                 params={
                     "accountId": user.accountId,
                     "overrideSharePermissions": True,
@@ -85,7 +111,7 @@ class JiraClient(BaseClient):
                 continue
             return filters
 
-    @handle_api_errors
+    @handle_jira_errors
     async def set_filter_owner(self, filter_id: str, new_owner_account_id: str) -> None:
         """Set the owner of a filter to a new user."""
         async with self._rate_limit():
@@ -95,7 +121,7 @@ class JiraClient(BaseClient):
                 json={"accountId": new_owner_account_id},
             )
 
-    @handle_api_errors
+    @handle_api_errors()
     async def search_issue_keys_for_user_field(
         self, field_name: str, user: User, project_key: Optional[str] = None
     ) -> list[str]:
@@ -131,7 +157,7 @@ class JiraClient(BaseClient):
                 continue
             return keys
 
-    @handle_api_errors
+    @handle_jira_errors
     async def bulk_update_user_field(
         self, issue_keys: list[str], field_name: str, new_account_id: str
     ) -> list[str]:
@@ -140,28 +166,27 @@ class JiraClient(BaseClient):
         """
         batch_size = 50
 
-        async def send_batch(chunk: list[str], batch_index: int):
-            try:
-                async with self._rate_limit(stagger_order=batch_index, delay=0.5):
-                    return await self.request(
-                        "POST",
-                        "/rest/api/3/bulk/issues/fields",
-                        json={
-                            "selectedActions": [field_name],
-                            "selectedIssueIdsOrKeys": chunk,
-                            "editedFieldsInput": {
-                                "singleSelectClearableUserPickerFields": [
-                                    {
-                                        "fieldId": field_name,
-                                        "user": {"accountId": new_account_id},
-                                    }
-                                ]
-                            },
+        @handle_jira_errors
+        async def send_batch(
+            chunk: list[str], batch_index: int
+        ) -> dict[str, Any] | Any:
+            async with self._rate_limit(stagger_order=batch_index, delay=0.5):
+                return await self.request(
+                    "POST",
+                    "/rest/api/3/bulk/issues/fields",
+                    json={
+                        "selectedActions": [field_name],
+                        "selectedIssueIdsOrKeys": chunk,
+                        "editedFieldsInput": {
+                            "singleSelectClearableUserPickerFields": [
+                                {
+                                    "fieldId": field_name,
+                                    "user": {"accountId": new_account_id},
+                                }
+                            ]
                         },
-                    )
-            except Exception as exc:
-                logger.error(str(exc))
-                raise  # will be ignored in gather
+                    },
+                )
 
         responses = await asyncio.gather(
             *(
@@ -173,9 +198,17 @@ class JiraClient(BaseClient):
             ),
             return_exceptions=True,
         )
-        return [resp.get("taskId", "") for resp in responses if isinstance(resp, dict)]
+        results = []
+        for resp in responses:
+            if isinstance(resp, APIError):
+                logger.error(str(resp))
+            elif isinstance(resp, Exception):
+                logger.error(f"Unexpected error: {resp}")
+            elif isinstance(resp, dict):
+                results.append(resp.get("taskId", ""))
+        return results
 
-    @handle_api_errors
+    @handle_jira_errors
     async def get_task_status(
         self,
         task: Task | str,
