@@ -1,51 +1,55 @@
 # Jira Reassign CLI
 
-A UV-managed Python CLI to bulk replace users in Jira Cloud by reassigning issue assignees.
+A Python CLI to bulk replace users in Jira Cloud by reassigning issue assignees.
 Fast and concurrent, using async HTTP requests to the Jira REST API.
 
 ## Requirements
-- [uv](https://github.com/astral-sh/uv) installed
+
+- Python >= 3.11 (or just use [uv](https://github.com/astral-sh/uv)...)
 - Jira Cloud site URL and API token
 
-## Configuration
-Copy `.env.example` to `.env` and fill in your Jira details.
-
-You can also export the following variables:
-
-```bash
-export JIRA_SITE="https://your-domain.atlassian.net"
-export JIRA_EMAIL="you@example.com"
-export JIRA_API_TOKEN="<your-api-token>"
-```
-
 ## Install
-From the project root, run:
+
+Just use your favorite python package manager:
+```bash
+uv tool install git+https://github.com/DamnDam/JiraReassign.git
+```
+
+## Configuration
+
+Export the following variables:
 
 ```bash
-uv sync
+export JTOOL_BASE_URL=https://your-domain.atlassian.net
+export JTOOL_EMAIL=you@example.com
+export JTOOL_API_TOKEN=your-api-token
 ```
+
+Or setup a .env file.
 
 ## Usage
-Run the CLI and see help:
 
+Run the CLI and see help:
 ```bash
-uv run jtool --help
+jtool --help
+```
+
+Test the environment parameters:
+```bash
+jtool --env-file test.env check
 ```
 
 Basic run with a CSV mapping:
-
 ```bash
-uv run jtool remap mapping.csv issues --project PROJ --concurrency 8
+jtool remap mapping.csv issues --project PROJ
 ```
 
 Dry run to preview counts:
-
 ```bash
-uv run jtool remap mapping.csv issues --dry-run
+jtool remap mapping.csv issues --dry-run
 ```
 
 CSV format (headers required):
-
 ```csv
 old,new
 old.user@example.com,new.user@example.com
@@ -55,25 +59,27 @@ old-account-id,new-account-id
 ## Dev
 
 ### Setup dev environment
-Sync the environment and install deps with uv:
 
+Sync the environment and install deps with uv:
 ```bash
 uv sync
 ```
 
+### Run lints, checks and formatters
+
+Optional:
+```bash
+uvx ruff check
+uvx ty src
+uvx ruff format
+```
+
 ### Setup pre-commit hooks
-Pre-commit hooks ensure code quality before each commit. 
+
+Pre-commit hooks ensure code quality before each push. 
 
 Install them with:
 
 ```bash
-uv run pre-commit install
-```
-
-### Run lint, checks and formatter
-
-Optional:
-```bash
-uv run ruff check
-uv run mypy src
+uvx pre-commit install
 ```
