@@ -21,11 +21,6 @@ jtool = "jtool.cli:app"
 requires = ["uv-build>=0.1"]
 build-backend = "uv_build"
 
-[dependency-groups]
-dev = [
-  "pre-commit>=4.5.1",
-]
-
 [tools.ruff]
 line-length = 100
 src = ["src"]
