@@ -25,3 +25,6 @@ build-backend = "uv_build"
 line-length = 100
 src = ["src"]
 exclude = ["__pycache__", ".venv"]
+
+[tool.ty.environment]
+root = ["./src"]
