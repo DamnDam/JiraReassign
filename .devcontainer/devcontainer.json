@@ -1,0 +1,60 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+    "name": "Python UV",
+    "build": {
+        "context": "..",
+        "dockerfile": "Dockerfile",
+        "args": {
+            // ## Update the Python version as needed. ##
+            "PYTHON_VERSION": "3.13"
+        }
+    },
+    // ## Uncomment to bind networking to the host machine. ##
+    // "runArgs": ["--network", "host"],
+    // ## Features to add to the dev container. More info: https://containers.dev/features. ##
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "username": "vscode",
+            "userUid": "1000",
+            "userGid": "1000",
+            "configureZshAsDefaultShell": true,
+            "upgradePackages": false
+            // ## Uncomment to install Docker CLI inside the container. ##
+            // },
+            // "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+            // 	"moby": false,
+            // 	"installDockerBuildx": true,
+            // 	"installDockerComposeSwitch": true,
+            // 	"version": "latest",
+            // 	"dockerDashComposeVersion": "v2"
+        }
+    },
+    "forwardPorts": [],
+    "remoteEnv": {
+        "UV_LINK_MODE": "copy",
+        "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv",
+        "UV_PYTHON_DOWNLOADS": "manual",
+        "UV_COMPILE_BYTECODE": "1"
+    },
+    // Run commands after the container is created.
+    "postCreateCommand": "uv sync; uvx pre-commit install",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "zsh",
+                "python.createEnvironment.trigger": "off",
+                "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
+                "python.venvPath": "/home/vscode/.venv",
+                "python.useEnvironmentsExtension": false
+            },
+            "extensions": [
+                "ms-azuretools.vscode-docker",
+                "ms-python.python",
+                "charliermarsh.ruff",
+                "astral-sh.ty"
+            ]
+        }
+    },
+    "remoteUser": "vscode"
+}
