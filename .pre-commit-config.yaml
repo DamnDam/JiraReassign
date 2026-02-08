@@ -26,4 +26,4 @@ repos:
         language: unsupported
         types: [python]
         pass_filenames: true
-        stages: [pre-commit]
+        stages: [pre-push]

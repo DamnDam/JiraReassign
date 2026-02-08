@@ -58,6 +58,8 @@ old-account-id,new-account-id
 
 ## Dev
 
+Use the provided Dev Container configuration for a consistent development environment.
+
 ### Setup dev environment
 
 Sync the environment and install deps with uv:
@@ -65,13 +67,18 @@ Sync the environment and install deps with uv:
 uv sync
 ```
 
+Activate the virtual environment:
+```bash
+source .venv/bin/activate
+```
+
 ### Run lints, checks and formatters
 
 Optional:
 ```bash
-uvx ruff check
-uvx ty src
-uvx ruff format
+ruff check
+ty src
+ruff format
 ```
 
 ### Setup pre-commit hooks
@@ -81,5 +88,5 @@ Pre-commit hooks ensure code quality before each push.
 Install them with:
 
 ```bash
-uvx pre-commit install
+pre-commit install
 ```
