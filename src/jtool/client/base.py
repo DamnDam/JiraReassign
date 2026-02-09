@@ -93,9 +93,7 @@ def handle_api_errors(
                     method=req.method,
                     url=str(req.url),
                     request_headers=_mask_headers(req.headers),
-                    request_body=(
-                        req.content.decode("utf-8", "replace") if req.content else None
-                    ),
+                    request_body=(req.content.decode("utf-8", "replace") if req.content else None),
                     response_headers=_mask_headers(resp.headers),
                     response_json=(
                         resp.json()

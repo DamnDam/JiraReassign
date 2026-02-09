@@ -167,9 +167,7 @@ class JiraClient(BaseClient):
         batch_size = 50
 
         @handle_jira_errors
-        async def send_batch(
-            chunk: list[str], batch_index: int
-        ) -> dict[str, Any] | Any:
+        async def send_batch(chunk: list[str], batch_index: int) -> dict[str, Any] | Any:
             async with self._rate_limit(stagger_order=batch_index, delay=0.5):
                 return await self.request(
                     "POST",
@@ -193,7 +191,7 @@ class JiraClient(BaseClient):
                 send_batch(chunk, idx)
                 for idx, chunk in enumerate(
                     issue_keys[i : i + batch_size]
-                    for i in range(0, len(issue_keys), batch_size)
+                    for i in range(0, len(issue_keys), batch_size)  # fmt: keep
                 )
             ),
             return_exceptions=True,

@@ -67,9 +67,7 @@ def remap_callback(
         rows = list(reader)
 
     async def main(rows: list[dict[str, str]]):
-        progress.add_task(
-            description=f"Resolving users ({len(rows)})...", total=len(rows)
-        )
+        progress.add_task(description=f"Resolving users ({len(rows)})...", total=len(rows))
 
         async with settings.get_client(JiraClient) as client:
 
@@ -83,20 +81,19 @@ def remap_callback(
                 )
                 progress.update(progress.tasks[-1].id, advance=1)
                 if isinstance(old_user, APIError):
-                    logger.warning(
-                        f"Old user '{row['old']}' not found; skipping. {str(old_user)}"
-                    )
+                    logger.warning(f"Old user '{row['old']}' not found; skipping. {str(old_user)}")
                 if isinstance(new_user, APIError):
-                    logger.warning(
-                        f"New user '{row['new']}' not found; skipping. {str(new_user)}"
-                    )
+                    logger.warning(f"New user '{row['new']}' not found; skipping. {str(new_user)}")
                 if isinstance(old_user, User) and isinstance(new_user, User):
                     return (old_user, new_user)
                 return None
 
             with console, progress:
                 user_solved = await asyncio.gather(
-                    *(resolve_user_map(row) for row in rows)
+                    *(
+                        resolve_user_map(row)
+                        for row in rows  # fmt: keep
+                    )
                 )
             user_maps = [um for um in user_solved if um is not None]
 
@@ -112,9 +109,7 @@ def remap_callback(
 @app.command("filters")
 def remap_filters(
     ctx: typer.Context,
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Only show counts; no changes."
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only show counts; no changes."),
 ):
     """Reassign filters from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
@@ -140,11 +135,12 @@ def remap_filters(
                     changed += 1
                     progress.update(progress.tasks[-1].id, advance=1)
 
-                progress.add_task(
-                    description="Gathering filters...", total=len(user_maps)
-                )
+                progress.add_task(description="Gathering filters...", total=len(user_maps))
                 filters_results = await asyncio.gather(
-                    *(find_filters(user) for user, _ in user_maps)
+                    *(
+                        find_filters(user)
+                        for user, _ in user_maps  # fmt: keep
+                    )
                 )
 
                 filter_maps = [
@@ -186,12 +182,13 @@ def remap_filters(
                         total=user_total,
                     )
                     await asyncio.gather(
-                        *(reassign_filter(fid, new) for fid in filters)
+                        *(
+                            reassign_filter(fid, new)
+                            for fid in filters  # fmt: keep
+                        )
                     )
 
-                    progress.update(
-                        progress_filters, total=user_total, completed=user_total
-                    )
+                    progress.update(progress_filters, total=user_total, completed=user_total)
                     progress.update(progress_user, advance=1)
 
         console.print(
@@ -208,9 +205,7 @@ def remap_issues(
     project: Optional[str] = typer.Option(
         None, "--project", help="Optional Jira project key to restrict scope."
     ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Only show counts; no changes."
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only show counts; no changes."),
 ):
     """Reassign issues from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
@@ -254,14 +249,10 @@ def remap_issues(
                             completed=sum(t.progressPercent for t in all_tasks),
                         )
                     else:
-                        progress.update(
-                            progress.tasks[-1].id, advance=task.progressPercent
-                        )
+                        progress.update(progress.tasks[-1].id, advance=task.progressPercent)
                     return task
 
-                progress.add_task(
-                    description="Gathering issues...", total=len(user_maps) * 2
-                )
+                progress.add_task(description="Gathering issues...", total=len(user_maps) * 2)
                 issues_results = await asyncio.gather(
                     *(
                         find_issues(field, user)
@@ -334,7 +325,7 @@ def remap_issues(
                     tasks: list[Task] = await asyncio.gather(
                         *(
                             track_task(tid, batch_index=idx)
-                            for idx, tid in enumerate(task_ids)
+                            for idx, tid in enumerate(task_ids)  # fmt: keep
                         )
                     )
 
@@ -362,9 +353,7 @@ def remap_issues(
 @app.command("spaces")
 def remap_spaces(
     ctx: typer.Context,
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Only show counts; no changes."
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only show counts; no changes."),
 ):
     """Reassign Confluence spaces from old -> new users according to the CSV mapping."""
     conf = cast(RemapContext, ctx.obj)
@@ -379,23 +368,17 @@ def remap_spaces(
         async with console, settings.get_client(ConfluenceClient) as client:
             with progress:
 
-                async def retrieve_space_permissions(
-                    space: Space, users: list[User]
-                ) -> None:
+                async def retrieve_space_permissions(space: Space, users: list[User]) -> None:
                     permissions = await client.list_space_permissions(space)
                     space.permissions = [
                         perm
                         for perm in permissions
                         if perm.subject.type == "user"
-                        and any(
-                            perm.subject.identifier == user.accountId for user in users
-                        )
+                        and any(perm.subject.identifier == user.accountId for user in users)
                     ]
                     progress.update(progress.tasks[-1].id, advance=1)
 
-                async def reassign_perm(
-                    space: Space, perm: SpacePermissionV1, new: User
-                ) -> None:
+                async def reassign_perm(space: Space, perm: SpacePermissionV1, new: User) -> None:
                     new_perm = perm.model_copy()
                     new_perm.id = None
                     new_perm.subject.identifier = new.accountId
@@ -412,16 +395,14 @@ def remap_spaces(
 
                 async def reassign_space(space: Space, new: User) -> None:
                     await asyncio.gather(
-                        *[
+                        *(
                             reassign_perm(space, perm, new)
-                            for perm in (space.permissions or [])
-                        ]
+                            for perm in (space.permissions or [])  # fmt: keep
+                        )
                     )
 
                     if space.type == "personal":
-                        await client.rename_space(
-                            space, f"{new.displayName}'s Old Personal Space"
-                        )
+                        await client.rename_space(space, f"{new.displayName}'s Old Personal Space")
 
                 old_users = [old for old, _ in user_maps]
 
@@ -432,7 +413,7 @@ def remap_spaces(
                 await asyncio.gather(
                     *(
                         retrieve_space_permissions(space, old_users)
-                        for space in all_spaces
+                        for space in all_spaces  # fmt: keep
                     )
                 )
 
@@ -499,12 +480,13 @@ def remap_spaces(
                         total=user_total,
                     )
                     await asyncio.gather(
-                        *(reassign_space(space, new) for space in spaces)
+                        *(
+                            reassign_space(space, new)
+                            for space in spaces  # fmt: keep
+                        )
                     )
 
-                    progress.update(
-                        progress_spaces, total=user_total, completed=user_total
-                    )
+                    progress.update(progress_spaces, total=user_total, completed=user_total)
                     progress.update(progress_user, advance=1)
 
         console.print(

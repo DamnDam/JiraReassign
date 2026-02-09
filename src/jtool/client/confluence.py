@@ -149,13 +149,11 @@ class ConfluenceClient(BaseClient):
 
         return [
             SpacePermissionV1._from_v2(SpacePermissionV2.model_validate(perm))
-            for perm in results
+            for perm in results  # fmt: keep
         ]
 
     @handle_confluence_errors
-    async def add_space_permission(
-        self, space: Space, permission: SpacePermissionV1
-    ) -> None:
+    async def add_space_permission(self, space: Space, permission: SpacePermissionV1) -> None:
         """Add a user permission to a Confluence space."""
         try:
             async with self._rate_limit():
@@ -167,8 +165,7 @@ class ConfluenceClient(BaseClient):
         except APIHTTPError as e:
             # Ignore conflict errors (permission already exists)
             if e.status_code == 409 or (
-                e.status_code == 400
-                and "Permission already exists." in (e.response_text or "")
+                e.status_code == 400 and "Permission already exists." in (e.response_text or "")
             ):
                 logger.warning(
                     f"Permission {str(permission.operation)} for {str(permission.subject)} already exists in space '{space.key}', skipping."
@@ -177,9 +174,7 @@ class ConfluenceClient(BaseClient):
             raise
 
     @handle_confluence_errors
-    async def remove_space_permission(
-        self, space: Space, permission: SpacePermissionV1
-    ) -> None:
+    async def remove_space_permission(self, space: Space, permission: SpacePermissionV1) -> None:
         """Remove a user permission from a Confluence space."""
         async with self._rate_limit():
             await self.request(
