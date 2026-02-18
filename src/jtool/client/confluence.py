@@ -100,6 +100,7 @@ class ConfluenceClient(BaseClient):
         """Acquire admin access for the current session."""
         async with self._rate_limit():
             await self.request("POST", "/wiki/api/v2/admin-key")
+        self._client.headers["Atl-Confluence-With-Admin-Key"] = "true"
 
     @handle_confluence_errors
     async def list_spaces(self) -> list[Space]:
@@ -144,6 +145,8 @@ class ConfluenceClient(BaseClient):
             next_page = links.get("next", "")
             if not next_page:
                 break
+            if not next_page.startswith("/wiki"):
+                next_page = "/wiki" + next_page
             async with self._rate_limit():
                 resp = await self.request("GET", next_page)
 
