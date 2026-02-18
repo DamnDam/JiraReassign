@@ -158,13 +158,18 @@ class ConfluenceClient(BaseClient):
     @handle_confluence_errors
     async def add_space_permission(self, space: Space, permission: SpacePermissionV1) -> None:
         """Add a user permission to a Confluence space."""
-        try:
+
+        @handle_api_errors()
+        async def _add_permission():
             async with self._rate_limit():
                 await self.request(
                     "POST",
                     f"/wiki/rest/api/space/{space.key}/permission",
                     json=permission.model_dump(),
                 )
+
+        try:
+            await _add_permission()
         except APIHTTPError as e:
             # Ignore conflict errors (permission already exists)
             if e.status_code == 409 or (
