@@ -101,9 +101,9 @@ class JiraClient(BaseClient):
                     "overrideSharePermissions": True,
                 },
             )
-        assert isinstance(resp, dict)
         filters: list[str] = []
         while True:
+            assert isinstance(resp, dict)
             filters.extend([f["id"] for f in resp.get("values", [])])
             if next_page := resp.get("nextPage"):
                 async with self._rate_limit():
