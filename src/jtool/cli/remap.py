@@ -152,19 +152,20 @@ def remap_filters(
                     if filters
                 ]
 
-                console.render_table(
-                    [
-                        ("Old User", "cyan"),
-                        ("Total Filters", "green"),
-                    ],
-                    [
-                        (
-                            f"{old.displayName} ({old.emailAddress or old.accountId})",
-                            str(len(filters)),
-                        )
-                        for old, new, filters in filter_maps
-                    ],
-                )
+                if filter_maps:
+                    console.render_table(
+                        [
+                            ("Old User", "cyan"),
+                            ("Total Filters", "green"),
+                        ],
+                        [
+                            (
+                                f"{old.displayName} ({old.emailAddress or old.accountId})",
+                                str(len(filters)),
+                            )
+                            for old, new, filters in filter_maps
+                        ],
+                    )
 
                 progress_user = progress.add_task(
                     description=f"Remapping users ({len(filter_maps)})...",
@@ -271,23 +272,24 @@ def remap_issues(
                     if assigned_keys or reported_keys
                 ]
 
-                console.render_table(
-                    [
-                        ("Old User", "cyan"),
-                        ("Total Assigned", "magenta"),
-                        ("Total Reported", "magenta"),
-                        ("Total Issues", "green"),
-                    ],
-                    [
-                        (
-                            f"{old.displayName} ({old.emailAddress or old.accountId})",
-                            str(len(assigned)),
-                            str(len(reported)),
-                            str(len(assigned) + len(reported)),
-                        )
-                        for old, _, assigned, reported in issue_maps
-                    ],
-                )
+                if issue_maps:
+                    console.render_table(
+                        [
+                            ("Old User", "cyan"),
+                            ("Total Assigned", "magenta"),
+                            ("Total Reported", "magenta"),
+                            ("Total Issues", "green"),
+                        ],
+                        [
+                            (
+                                f"{old.displayName} ({old.emailAddress or old.accountId})",
+                                str(len(assigned)),
+                                str(len(reported)),
+                                str(len(assigned) + len(reported)),
+                            )
+                            for old, _, assigned, reported in issue_maps
+                        ],
+                    )
 
                 progress_user = progress.add_task(
                     description=f"Remapping Users ({len(issue_maps)})...",
@@ -448,21 +450,22 @@ def remap_spaces(
                     )
                 ]
 
-                console.render_table(
-                    [
-                        ("Old User", "cyan"),
-                        ("Total Spaces", "green"),
-                        ("Total Permissions", "green"),
-                    ],
-                    [
-                        (
-                            f"{old.displayName} ({old.emailAddress or old.accountId})",
-                            str(len(spaces)),
-                            str(sum(len(space.permissions or []) for space in spaces)),
-                        )
-                        for old, new, spaces in space_maps
-                    ],
-                )
+                if space_maps:
+                    console.render_table(
+                        [
+                            ("Old User", "cyan"),
+                            ("Total Spaces", "green"),
+                            ("Total Permissions", "green"),
+                        ],
+                        [
+                            (
+                                f"{old.displayName} ({old.emailAddress or old.accountId})",
+                                str(len(spaces)),
+                                str(sum(len(space.permissions or []) for space in spaces)),
+                            )
+                            for old, new, spaces in space_maps
+                        ],
+                    )
 
                 progress_user = progress.add_task(
                     description=f"Remapping users ({len(space_maps)})...",
